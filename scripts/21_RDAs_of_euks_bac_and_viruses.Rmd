@@ -1,0 +1,1133 @@
+---
+title: "RDA of euks_bac_and_vir"
+author: "Julia Gustavsen"
+date: "July 16, 2015"
+output: 
+ html_document:
+  fig_caption: yes
+  force_captions: yes
+  highlight: pygments
+  keep_md: yes
+  number_sections: yes
+  toc: yes
+  toc_depth: 6
+---
+
+# A bit of background: 
+
+* Have a time series that consists of 13 months of data sampled every other week at Jericho Pier. 
+* For this time series I have data from 5 different targets (using marker genes):
+    * Eukaryotes (18S)
+    * Bacteria(16S)
+    * a subset of large DNA viruses (AVS-algal viruses)
+    * a subset of small RNA viruses (MPL-marine picorna like)
+    * a subset of bacteriophage (gp23)
+ 
+* The hosts for the AVS are eukaryotic phytoplankton
+* Known hosts for MPL are also eukaryotic phytoplankton
+* Hosts for bacteriophage are bacteria. 
+
+
+# Questions:
+
+## Are the changes in community structure and composition of the bacterial and eukaryotic communities driven by environmental conditions? 
+
+	* In marine bacterial communities the most important driver of community compostion and change has been day length in one study and salinity in another. 
+	* In marine planktonic eukaryotic communities there have not been clear patterns of the overall community, but light and nutrients are important factors. 
+
+##  Are the changes in community structure and composition of the viral  communities driven by environmental conditions or solely by host comunities? 
+
+* So I think it makes sense that an RDA with viral data and environmental parameters explains no more than random noise would. 
+
+# Approach:
+
+* use RDA to see if environmental parameters are driving the patterns we see in the species abundance tables. 
+
+* Unsure about whether RDA or CCA is the right approach. Unsure how to know in a community setting whether the species will react linearly or monotonically to the environmental gradient?? 
+
+* Other main question: if the overall RDA is significant (0.005 level), but no axes are significant, is it still appropriate to look at the variation partitioning of the different groups of parameters? 
+
+```{r warnings=FALSE,message=FALSE}
+library(vegan)
+library(ggplot2)
+library(reshape2)
+library(plyr)
+library(dplyr)
+library(packfor)
+library(geosphere)
+library(ggvegan)
+library(grid)
+library(gridExtra)
+```
+
+Load the species abundance tables
+``` {r}
+normalized_18s_OTUs <- read.delim("../data/OTU_table_Jericho_time_series_normalized_18S.tsv", row.names="VC_number")
+## tidy up some OTU sizes in the the names
+colnames(normalized_18s_OTUs) <- gsub(".size.*.", "", colnames(normalized_18s_OTUs))
+
+normalized_18s_OTUs_phytos <- read.delim("../data/OTU_table_Jericho_time_series_18s_normalized_Phytoplankton.tsv", row.names=1)
+normalized_18s_OTUs_hetero <- read.delim("../data/OTU_table_Jericho_time_series_18s_normalized_Heterotrophs.tsv",                                  row.names=1)
+
+normalized_gp23_OTUs <- read.delim("../data/OTU_table_Jericho_time_series_normalized_gp23.tsv", row.names="VC_number")
+
+normalized_MPL_OTUs <- read.delim("../data/OTU_table_Jericho_time_series_normalized_MPL.tsv", row.names="VC_number")
+
+normalized_AVS_OTUs <- read.delim("../data/OTU_table_Jericho_time_series_normalized_AVS_concat.tsv", row.names="VC_number")
+
+normalized_16s_OTUs <- read.delim("../data/OTU_table_Jericho_time_series_normalized_16S_R1.tsv", row.names="VC_number") 
+## tidy up some OTU sizes in the the names
+colnames(normalized_16s_OTUs) <- gsub(".size.*.", "", colnames(normalized_16s_OTUs))
+```
+
+Normalized in this case means to have normalized overall by the lowest number of sequencing reads. (So exclude some samples that have a very low number of reads and then go with the lowest number of reads from a sample and normalize all other samples to that number). 
+
+Have a look at eukaryotic data
+```{r}
+head(normalized_18s_OTUs[,1:10])
+```
+
+Read in environmental data
+
+```{r}
+original_jericho_data <- read.csv("../results/Jericho_data_for_env_analysis.csv", row.names=1)
+original_jericho_data$Date <- as.Date(original_jericho_data$Date)
+
+## missing data filled in by mean imputation
+Jericho_data <- read.csv("../results/Jericho_env_data_mean_imputed.csv", row.names=1)
+Jericho_data$Date <- as.Date(Jericho_data$Date)
+
+## amplicon richness 
+amplicon_richness <- read.csv("../results/amplicon_richness_by_date.csv")
+amplicon_richness$Date <- as.Date(amplicon_richness$Date)
+```
+
+Check out the enviromental data matrix 
+``` {r}
+head(Jericho_data)
+```
+
+exclude season and nitrate+nitrate (because of colinearity with phosphate)
+
+``` {r}
+## exclude season and NO2
+parameters_to_exclude <- c("season",
+                           "Average_NO3_NO2",
+                           "Standard_error_NO3_NO2",
+                           "Secchi_disk_disappears",
+                           "Secchi_disk_reappears",
+                           "Dissolved_oxygen_percent",
+                           "VC_number",
+                           "Tide_height",
+                           "month_number",
+                           "Raw_Bacteria_Rep_A",
+                           "Raw_Bacteria_Rep_B",
+                           "Raw_Viruses_rep_A",
+                           "Raw_Viruses_rep_B",
+                           "PO4_rep_A",
+                           "PO4_rep_B",
+                           "SiO2_rep_A",
+                           "SiO2_rep_B",
+                           "NO3_NO2_rep_A",
+                           "NO3_NO2_rep_B",
+                           "Average_viral_abundance",
+                           "Standard_error_viral_abundance",
+                           "Standard_error_bacterial_abundance",
+                           "Standard_error_PO4",
+                           "Standard_error_SiO2",
+                           "Standard_error_chl_a")
+
+params_Jericho <-  subset(Jericho_data, select= !(colnames(Jericho_data) %in% parameters_to_exclude))
+head(params_Jericho)
+```
+
+
+```{r}
+library(psych)
+corr.test(params_Jericho[,-1])$r
+```
+
+Matt Barbour suggested trying to do a PCA and then try using the axes for the RDA. 
+Also month number could have a unimodal effect on the model
+
+
+```{r}
+env.pca <- rda(params_Jericho[,-1], scale=TRUE) # scale=TRUE calls for a stadardization of the variables
+env.pca
+head(summary(env.pca)) # Default scaling 2
+plot(env.pca)
+## what is this scaling 2??
+head(summary(env.pca, scaling = 1))
+env.pca$CA
+str(env.pca$CA)
+
+env.pca$sites
+pca_pc1_and_pc2 <- as.data.frame(scores(env.pca)$sites)
+
+pca_pc1_and_pc2$Date <- params_Jericho$Date
+
+env.pca_2 <- princomp(params_Jericho[,-1], scale=TRUE)
+summary(env.pca_2)
+str(env.pca_2)
+env.pca_2$loadings
+env.pca_2$scores
+plot(env.pca_2)
+## try it without viral abundance
+
+env.pca <- rda(params_Jericho[,c(-1,-6)], scale=TRUE) # scale=TRUE calls for a stadardization of the variables
+env.pca
+head(summary(env.pca)) # Default scaling 2
+plot(env.pca)
+## what is this scaling 2??
+head(summary(env.pca, scaling = 1))
+
+
+## or separate it out by enviromental or chemical params
+envbio <- params_Jericho[,c("Average_bacterial_abundance", 
+                                "Average_chl_a")]
+envchem <- params_Jericho[,c("Average_PO4",
+                                 "Average_SiO2",
+                                 "Temperature_YSI", 
+                                 "Salinity_ppt_YSI",
+                                 "pH")]
+envtemp <- params_Jericho[,("day_length")]
+
+env.bio.pca <- rda(envbio, scale=TRUE)
+plot(env.bio.pca)
+
+env.chem.pca <- rda(envchem, scale=TRUE)
+plot(env.chem.pca)
+
+
+
+```
+
+
+
+Some samples are missing (or didn't sequence well), so need to subset the enviromental data for the data I actually got back for the eukaryotes. 
+
+``` {r}
+VC_dates <- Jericho_data$Date[match(rownames(normalized_18s_OTUs), original_jericho_data$VC_number)]
+
+params_Jericho_18s <- subset(params_Jericho, Date %in% VC_dates)
+
+amplicon_richness_for_study <- subset(amplicon_richness, Date %in% VC_dates )
+## temporary fix for missing data. Or should do mean imputation...?
+
+amplicon_richness_for_study[is.na(amplicon_richness_for_study)] <- 0
+```
+
+
+
+
+Divide up the environmental data for later use with partial RDA. 
+
+``` {r}
+envbio <- params_Jericho_18s[,c("Average_bacterial_abundance", 
+                                "Average_chl_a")]
+envchem <- params_Jericho_18s[,c("Average_PO4",
+                                 "Average_SiO2",
+                                 "Temperature_YSI", 
+                                 "Salinity_ppt_YSI",
+                                 "pH")]
+envtemp <- params_Jericho_18s[,c("day_length")]
+envrich <- amplicon_richness_for_study[,c("richness.AVS", 
+                                          "richness.MPL",
+                                          "richness.16S",
+                                          "richness.gp23")]
+```
+
+Read in eukaryotic taxonomic data
+```{r}
+taxonomy_18s <- read.csv( "../results/cleaned_up_18s_taxonomy_Jericho.csv", row.names=1)
+```
+
+# Functions to run RDA, check for significance and plot the data
+
+```{r}
+
+hell_transform_and_rda <- function (otu_table, env_table) {
+  
+  hel_trans <- decostand(otu_table, "hellinger")
+
+  print(spe.rda <- rda(hel_trans ~ ., env_table))
+  
+  print(R2 <- RsquareAdj(spe.rda)$r.squared)
+  
+  # Adjusted R^2 retrieved from the rda object
+  print(R2adj <- RsquareAdj(spe.rda)$adj.r.squared)
+
+  return(spe.rda)
+}
+
+check_sig_of_rda <- function (population_rda) {
+ try(anova_rda <- anova.cca(population_rda, step=1000))
+ print(anova_rda)
+}
+
+#Plot of the RDA scaling 1
+plot_scaling_1 <- function (population_rda) {
+ 
+ # Total variation of the species dataset (sum of all eigenvalues)
+ population_rda$tot.chi
+ anova_rda <- anova.cca(population_rda, step=1000)
+ 
+ # Variation explained by each canonical axis (%) sing adjusted R2
+ 
+ adjust_var_axe <- 100 * population_rda$CCA$eig / RsquareAdj(population_rda)$adj.r.squared
+ 
+ R2 <- RsquareAdj(population_rda)$r.squared
+ # Adjusted R^2 retrieved from the rda object
+ R2adj <- RsquareAdj(population_rda)$adj.r.squared
+ 
+ scrs <- fortify(population_rda, scaling = 1)
+ 
+ ## take only site scores for this
+ sites <- with(scrs, scrs[Score == "sites", ])
+ species <- with(scrs, scrs[Score == "species", ])
+ biplot <- with(scrs, scrs[Score == "biplot",])
+ 
+ overall_plot <-   ggplot(species, 
+                          aes(x = Dim1,
+                              y = Dim2,
+                              label=Label))+
+  coord_fixed(xlim = c(-1.5,1.5),
+                ylim = c(-1.5,1.5))+
+  xlab(paste0( "RDA1 (percent explained",
+               round(adjust_var_axe, digits=2), ")"))+
+  ylab(paste0( "RDA2 (percent explained",
+               round(adjust_var_axe[2], digits=2), ")"))
+ 
+ ## add in arrows
+ plt <- overall_plot
+ geom_segment(aes(x=0, y=0, xend=Dim1, yend=Dim2),
+              colour="purple", 
+              arrow = arrow(length = unit(0.5, "cm")))+
+  geom_text(data=sites,
+            aes(x = Dim1, y = Dim2, label=Label),
+            hjust=1.2,
+            size=3)+
+  geom_point(data=sites,
+             aes(x = Dim1, y = Dim2, label=Label),
+             colour="blue")+
+  annotate("text", x=-1, y=-1,
+           label=paste0("Adjusted r2 =",
+                        round(R2adj,digits=2), 
+                        "\nOverall significance=",
+                        anova_rda$"Pr(>F)"[1]),
+           hjust = 0 ,
+           size=4)
+ print(plt)
+ 
+ plt2 <-  overall_plot+ 
+  geom_point(data=sites,
+             aes(x = Dim1, y = Dim2, label=Label), 
+             colour="blue")+
+  geom_segment(data=biplot,
+               aes(x=0, y=0, xend=Dim1, yend=Dim2), 
+               colour="green",
+               arrow = arrow(length = unit(0.5, "cm")))+
+  geom_text(data=biplot, 
+            aes(x=Dim1, y=Dim2), 
+            colour="black", size=3)
+ print(plt2)
+ 
+ plt3 <-  overall_plot + 
+  geom_text(hjust=1.2, 
+            colour="purple",
+            size=3)+
+  geom_segment(data=biplot,
+               aes(x=0, y=0, xend=Dim1, yend=Dim2),
+               colour="green",
+               arrow = arrow(length = unit(0.5, "cm")))+
+  geom_text(data=biplot, 
+            aes(x=Dim1, y=Dim2), 
+            colour="black", 
+            size=3 )
+ print(plt3)
+ 
+ plt4 <-  plt3 +
+  geom_point(data=sites,
+             aes(x = Dim1, y = Dim2, label=Label), 
+             colour="blue")
+ print(plt4)
+}
+
+#Scaling 2 with the same data
+plot_scaling_2 <- function (population_rda) {
+scrs <- fortify(population_rda, scaling = 2)
+
+sites <- with(scrs, scrs[Score == "sites", ])
+species <- with(scrs, scrs[Score == "species", ])
+biplot <- with(scrs, scrs[Score == "biplot",])
+## add in something to plot for the arrows
+
+## add in arrows
+ plt <- overall_plot
+ geom_segment(aes(x=0, y=0, xend=Dim1, yend=Dim2),
+              colour="purple", 
+              arrow = arrow(length = unit(0.5, "cm")))+
+  geom_text(data=sites,
+            aes(x = Dim1, y = Dim2, label=Label),
+            hjust=1.2,
+            size=3)+
+  geom_point(data=sites,
+             aes(x = Dim1, y = Dim2, label=Label),
+             colour="blue")+
+  annotate("text", x=-1, y=-1,
+           label=paste0("Adjusted r2 =",
+                        round(R2adj,digits=2), 
+                        "\nOverall significance=",
+                        anova_rda$"Pr(>F)"[1]),
+           hjust = 0 ,
+           size=4)
+ print(plt)
+ 
+ plt2 <-  overall_plot+ 
+  geom_point(data=sites,
+             aes(x = Dim1, y = Dim2, label=Label), 
+             colour="blue")+
+  geom_segment(data=biplot,
+               aes(x=0, y=0, xend=Dim1, yend=Dim2), 
+               colour="green",
+               arrow = arrow(length = unit(0.5, "cm")))+
+  geom_text(data=biplot, 
+            aes(x=Dim1, y=Dim2), 
+            colour="black", size=3)
+ print(plt2)
+ 
+ plt3 <-  overall_plot + 
+  geom_text(hjust=1.2, 
+            colour="purple",
+            size=3)+
+  geom_segment(data=biplot,
+               aes(x=0, y=0, xend=Dim1, yend=Dim2),
+               colour="green",
+               arrow = arrow(length = unit(0.5, "cm")))+
+  geom_text(data=biplot, 
+            aes(x=Dim1, y=Dim2), 
+            colour="black", 
+            size=3 )
+ print(plt3)
+ 
+ plt4 <-  plt3 +
+  geom_point(data=sites,
+             aes(x = Dim1, y = Dim2, label=Label), 
+             colour="blue")
+ print(plt4)
+}
+
+```
+
+Try with the pca axes
+```{r}
+VC_dates <- Jericho_data$Date[match(rownames(normalized_18s_OTUs), original_jericho_data$VC_number)]
+
+pca_pc1_and_pc2_18s<- subset(pca_pc1_and_pc2, Date %in% VC_dates)
+```
+
+
+# Subset 18s to remove metazoans  
+If I subset the data to remove metazoans that might now have been living when I sampled. 
+Create a subset of data that excludes the Opisthokonts (e.g. metazoans and fungi)
+
+```{r}
+taxonomy_18s_no_met_fun <- subset(taxonomy_18s,!(Phylum %in% "Opisthokonta"))
+```
+
+
+```{r}
+normalized_18s_OTUs_no_met_fun <- subset(normalized_18s_OTUs, select=(colnames(normalized_18s_OTUs) %in% taxonomy_18s_no_met_fun$otu_number ))
+
+```
+
+```{r}
+melted_otus <- melt(as.matrix(normalized_18s_OTUs_no_met_fun))
+
+```
+
+# Try summarising the eukaryotic data by the family level
+```{r}
+### Summarise 18s OTUs to the Family level ####
+melted_otus$Family <- taxonomy_18s_no_met_fun$Family[match(melted_otus$Var2, taxonomy_18s_no_met_fun$otu_number)]
+## remove unclassified
+melted_otus <- subset(melted_otus, Family != "unclassified"  )
+
+fam_melted <- melted_otus %>%
+ #group_by(Var1,Family) %>%
+ group_by(Family,Var1) %>%
+ summarise(total=sum(value))
+
+## Ok need to put it back together again.
+fam_sum_otus <- dcast(fam_melted, Var1 ~  Family)
+## need to make them rownames again
+row.names(fam_sum_otus) <- fam_sum_otus$Var1
+fam_sum_otus <- fam_sum_otus[,-1]
+
+write.csv(fam_sum_otus, file="../results/normalized_18s_summarized_by_family.csv")
+```
+
+
+```{r}
+normalized_18s_rda_fam_sum <- hell_transform_and_rda(fam_sum_otus ,params_Jericho_18s[,-1] ) 
+save(normalized_18s_rda_fam_sum, file ="../results/normalized_18s_rda_fam_sum.rda")
+load("../results/normalized_18s_rda_fam_sum.rda")
+# All eigenvalues
+ev = c(normalized_18s_rda_fam_sum$CCA$eig, normalized_18s_rda_fam_sum$CA$eig)
+ev
+
+# Total variation of the species dataset (sum of all eigenvalues)
+normalized_18s_rda_fam_sum$tot.chi
+
+# Variation explained by each canonical axis (%) sing adjusted R2
+100 * normalized_18s_rda_fam_sum$CCA$eig / RsquareAdj(normalized_18s_rda_fam_sum)$adj.r.squared
+
+adjust_var_axe <- 100 * normalized_18s_rda_fam_sum$CCA$eig / RsquareAdj(normalized_18s_rda_fam_sum)$adj.r.squared
+
+str(adjust_var_axe[1])
+# Variation explained by each canonical axis (%) u
+100 * normalized_18s_rda_fam_sum$CCA$eig / normalized_18s_rda_fam_sum$tot.chi
+
+
+# Variation explained by the full model (%)
+100 * sum(normalized_18s_rda_fam_sum$CCA$eig) / normalized_18s_rda_fam_sum$tot.chi
+
+R2 <- RsquareAdj(normalized_18s_rda_fam_sum)$r.squared
+# Adjusted R^2 retrieved from the rda object
+R2adj <- RsquareAdj(normalized_18s_rda_fam_sum)$adj.r.squared
+
+```
+
+
+```{r}
+check_sig_of_rda(normalized_18s_rda_fam_sum) 
+## overall significant.
+## check the significance of the axes.
+anova.cca(rda(decostand(fam_sum_otus, "hellinger") ~.,params_Jericho_18s[,-1]),by="axis", step=1000)
+vif.cca(normalized_18s_rda_fam_sum)
+```
+
+Plot it.
+``` {r}
+pdf("../figures/Triplot_RDA_normalized_18s_rda_fam_sum%03d.pdf", onefile=FALSE)
+plot_scaling_1(normalized_18s_rda_fam_sum)
+dev.off()
+plot_scaling_2(normalized_18s_rda_fam_sum)
+```
+
+# Summarise 18s OTUs to the order level
+```{r}
+melted_otus <- melt(as.matrix(normalized_18s_OTUs_no_met_fun))
+melted_otus$Order <- taxonomy_18s_no_met_fun$Order[match(melted_otus$Var2, taxonomy_18s_no_met_fun$otu_number)]
+## remove unclassified
+melted_otus <- subset(melted_otus, Order != "unclassified"  )
+
+ord_melted <- melted_otus %>%
+ group_by(Var1,Order) %>%
+ summarise(total=sum(value))
+
+## Ok need to put it back together again.
+## Families on top
+ord_sum_otus <- dcast(ord_melted, Var1 ~  Order)
+## need to make them rownames again
+row.names(ord_sum_otus) <- ord_sum_otus$Var1
+ord_sum_otus <- ord_sum_otus[,-1]
+
+write.csv(ord_sum_otus, file="../results/normalized_18s_summarized_by_order.csv")
+```
+
+
+```{r}
+normalized_18s_rda_ord_sum <- hell_transform_and_rda(ord_sum_otus  ,params_Jericho_18s[,-1] ) 
+vif.cca(normalized_18s_rda_ord_sum)
+```
+
+```{r}
+check_sig_of_rda(normalized_18s_rda_ord_sum) 
+## check the significance of the axes.
+anova.cca(rda(decostand(ord_sum_otus, "hellinger") ~.,params_Jericho_18s[,-1]),by="axis", step=1000)
+```
+
+
+``` {r}
+plot_scaling_1(normalized_18s_rda_ord_sum)
+plot_scaling_2(normalized_18s_rda_ord_sum)
+```
+
+
+
+
+
+
+
+
+Try with phytoplantkon vs heterotrophs
+```{r}
+
+phytoplankton_fam <- c("Diatomea",
+                       "Dinophyceae",
+                       "Mamiellophyceae",
+                       "Chrysophyceae",
+                       "Chlorophyceae",
+                       "Euglenozoa",
+                       "Dictyochophyceae",
+                       "Chlorarachniophyta",
+                       "Raphidophyceae")
+phytoplankton_class <- c("Rhodophyceae",
+                         "Chloroplastida")
+phytoplantkon_phylum <- c("Haptophyta",
+                          "Cryptophyceae")
+phytoplankton_order <- c("Dinoflagellata",
+                         "Ochrophyta") ## not sure about this, are all dinos phytoplankton?
+
+## algae but maybe not phytoplankton,
+algae_class <- c("Chloroplastida")
+
+## masts we don't know...
+
+
+phytoplankton_tax <- taxonomy_18s %>% 
+ filter(Family %in% phytoplankton_fam | Class %in% phytoplankton_class | Phylum %in% phytoplantkon_phylum| Order %in% phytoplankton_order)
+
+phytoplankton_otus <- droplevels(subset(fam_sum_otus, select= colnames(fam_sum_otus) %in% phytoplankton_tax$Family)) 
+normalized_18s_rda_fam_sum_phyto <- hell_transform_and_rda(phytoplankton_otus ,params_Jericho_18s[,-1] ) 
+
+check_sig_of_rda(normalized_18s_rda_fam_sum_phyto) 
+## overall significant.
+## check the significance of the axes.
+anova.cca(rda(decostand(phytoplankton_otus, "hellinger") ~.,params_Jericho_18s[,-1]),by="axis", step=1000)
+vif.cca(normalized_18s_rda_fam_sum_phyto)
+
+plot_scaling_1(normalized_18s_rda_fam_sum_phyto)
+
+plot_scaling_2(normalized_18s_rda_fam_sum_phyto)
+
+OTU_table <- phytoplankton_otus
+transformation <- "hellinger"
+spe.hel <- decostand(OTU_table, transformation)
+spe.part.bio_chem <- varpart(spe.hel, envchem, envbio)
+spe.part.bio_chem
+plot(spe.part.bio_chem, digits=2)
+
+
+```
+
+
+## What about heterotrophs
+
+```{r}
+## or coudl try approach that heterotrophs are those that are not phytoplankton
+heterotroph_tax <- taxonomy_18s %>% 
+ filter(!(otu_number %in% phytoplankton_tax$otu_number))
+heterotroph_otus <- droplevels(subset(fam_sum_otus, select = colnames(fam_sum_otus) %in% heterotroph_tax$Family)) 
+
+normalized_18s_rda_fam_sum_het <- hell_transform_and_rda(heterotroph_otus ,params_Jericho_18s[,-1] ) 
+
+check_sig_of_rda(normalized_18s_rda_fam_sum_het) 
+## overall significant.
+## check the significance of the axes.
+anova.cca(rda(decostand(heterotroph_otus, "hellinger") ~.,params_Jericho_18s[,-1]),by="axis", step=1000)
+vif.cca(normalized_18s_rda_fam_sum_het)
+
+plot_scaling_1(normalized_18s_rda_fam_sum_het)
+
+plot_scaling_2(normalized_18s_rda_fam_sum_het)
+
+
+OTU_table <- heterotroph_otus
+transformation <- "hellinger"
+spe.hel <- decostand(OTU_table, transformation)
+spe.part.bio_chem <- varpart(spe.hel, envchem, envbio)
+spe.part.bio_chem
+plot(spe.part.bio_chem, digits=2)
+
+```
+
+
+# Partial RDA 
+
+* X -community data matrix 
+* Y - constraining matrix -env variables
+* Z -conditioning matrix- effect of which is partialed out
+* rda(X, Y, Z)
+
+```{r} 
+#X -community data matrix 
+partial_RDA <- function(OTU_table, table1, table2){
+ spe.hel <- decostand(OTU_table, "hellinger")
+ rda_partial <- rda(spe.hel, table1, table2)
+ print(rda_partial)
+  R2 <- RsquareAdj(rda_partial)$r.squared
+  # Adjusted R^2 retrieved from the rda object
+ R2adj <- RsquareAdj(rda_partial)$adj.r.squared
+ return(rda_partial)
+} 
+```
+
+
+
+```{r} 
+RDA_with_forward_selection <- function (OTU_table,
+                                         env_data){
+ spe.hel <- decostand(OTU_table, "hellinger")
+ spe.rda.all <- rda(spe.hel ~ .,data=env_data)
+ #global adjusted R2
+ (R2a.all <- RsquareAdj(spe.rda.all)$adj.r.squared)
+ # Forward selection using packfor's forward.sel()
+ try(forward_select_var <- forward.sel(spe.hel, env_data, adjR2thresh=R2a.all))
+
+ try(spe.rda.forward <- rda(as.formula(paste("spe.hel  ~ ",paste(forward_select_var$variables, collapse="+"),sep = "")),
+                        data=env_data))
+ print(spe.rda.forward)
+ try(R2a.forward <- RsquareAdj(spe.rda.forward)$adj.r.squared)
+try(return(spe.rda.forward))
+}
+```
+
+
+RDA with forward selection
+```{r} 
+rda_forward_sel <- RDA_with_forward_selection(fam_sum_otus, params_Jericho_18s[,-1])
+```
+
+
+```{r}
+check_sig_of_rda(rda_forward_sel) 
+
+vif.cca(rda_forward_sel)
+```
+
+``` {r}
+plot_scaling_1(rda_forward_sel)
+plot_scaling_2(rda_forward_sel)
+```
+
+
+# Variation partitionign with all explanatory variables
+
+```{r}
+
+OTU_table <- fam_sum_otus
+transformation <- "hellinger"
+spe.hel <- decostand(OTU_table, transformation)
+spe.part.bio_chem <- varpart(spe.hel, envchem, envbio)
+spe.part.bio_chem
+plot(spe.part.bio_chem, digits=2)
+```
+
+# So it seems that the variables are intercorrelated so a good reason to do parsimony and combine variation partitioning with forward selection.
+
+```{r}
+spe.part.all <- varpart(spe.hel, envchem, envbio,envtemp)
+spe.part.all
+plot(spe.part.all, digits=2)
+
+spe.part.all <- varpart(spe.hel, envchem, envbio,envrich)
+spe.part.all
+plot(spe.part.all, digits=2)
+
+spe.part.all <- varpart(spe.hel, envchem, envbio,envrich, envtemp)
+spe.part.all
+plot(spe.part.all, digits=2)
+
+anova.cca(rda(spe.hel,envchem),step=1000) ## significant
+anova.cca(rda(spe.hel, envbio),step=1000) ## significant
+anova.cca(rda(spe.hel, envtemp),step=1000) ## 0.006 so > 0.005
+anova.cca(rda(spe.hel, envrich),step=1000) ## 0.099 not significant
+```
+
+So stick with chem and biological parameters. 
+
+## Try Separate forward selection in each subset of environmental variables
+```{r}
+spe.chem <- rda(spe.hel, envchem)
+R2a.all.chem <- RsquareAdj(spe.chem)$adj.r.squared
+forward.sel(spe.hel, envchem, adjR2thresh = R2a.all.chem, nperm=9999)
+
+spe.bio <- rda(spe.hel, envbio)
+R2a.all.bio <- RsquareAdj(spe.bio)$adj.r.squared
+forward.sel(spe.hel, envbio, adjR2thresh=R2a.all.bio, nperm=9999)
+
+spe.temp <- rda(spe.hel, envtemp)
+R2a.all.temp <- RsquareAdj(spe.temp)$adj.r.squared
+forward.sel(spe.hel, envtemp, adjR2thresh=R2a.all.temp, nperm=9999)
+
+spe.rich <- rda(spe.hel, envrich)
+R2a.all.rich <- RsquareAdj(spe.rich)$adj.r.squared
+forward.sel(spe.hel, envrich, adjR2thresh=R2a.all.rich, nperm=9999)
+
+#parsimonioius subsets of explanatory variables(based on forward selections)
+envchem.pars <- envchem[,c(1,3,4)]
+envbio.pars <- envbio[,c(1,2)] ## but this doesn't quite make sense because it was only 1. I will redo with only 1
+envtemp.pars <- envtemp
+envrich.pars <- envrich[,c(2)]
+## Variation partitioning
+
+# (spe.part <- varpart(spe.hel, envchem.pars, envbio.pars, envrich.pars))
+# plot(spe.part, digits=2)
+
+# (spe.part <- varpart(spe.hel, envchem.pars, envbio.pars, envrich.pars, envtemp.pars))
+# plot(spe.part, digits=2)
+
+
+anova.cca(rda(spe.hel, envchem.pars),step=1000) ## significant
+anova.cca(rda(spe.hel, envbio.pars),step=1000) ## significant
+anova.cca(rda(spe.hel, envtemp.pars),step=1000) ## significant
+anova.cca(rda(spe.hel, envrich.pars),step=1000) ## not significant
+
+## using those that are significant
+(spe.part <- varpart(spe.hel, envchem.pars, envbio.pars, envtemp.pars))
+plot(spe.part, digits=2)
+```
+
+## In Eukaryotes tried removing a sample which had high chlorophyll a (large bloom) 
+```{r}
+## remove VC 1252 from env param and from OTUs
+fam_sum_otus_no_1252 <-fam_sum_otus[-25,]
+params_Jericho_without_date_no_1252 <- params_Jericho_18s[-25,-1]
+```
+
+
+```{r}
+normalized_18s_rda_fam_sum_no_1252 <- hell_transform_and_rda(fam_sum_otus_no_1252 ,params_Jericho_without_date_no_1252 ) 
+```
+
+```{r}
+check_sig_of_rda(normalized_18s_rda_fam_sum_no_1252) 
+anova.cca(rda(decostand(fam_sum_otus_no_1252, "hellinger") ~.,params_Jericho_without_date_no_1252),by="axis", step=1000)
+```
+
+
+```{r}
+plot_scaling_1(normalized_18s_rda_fam_sum_no_1252)
+plot_scaling_2(normalized_18s_rda_fam_sum_no_1252)
+```
+
+
+# Now try with 16s
+```{r}
+VC_dates <- Jericho_data$Date[match(rownames(normalized_16s_OTUs), original_jericho_data$VC_number)]
+params_Jericho_16s <- subset(params_Jericho, Date %in% VC_dates )
+amplicon_richness_for_study <- subset(amplicon_richness, Date %in% VC_dates )
+## temporary fix
+amplicon_richness_for_study[is.na(amplicon_richness_for_study)] <- 0
+
+```
+
+Separate out env params 
+
+```{r}
+#Physiogrpahy
+envbio <- params_Jericho_16s[,c( "Average_bacterial_abundance",
+                                "Average_chl_a")]
+names(envbio)
+
+envchem <- params_Jericho_16s[,c("Average_PO4",
+                                 "Average_SiO2",
+                                 "Temperature_YSI",
+                                 "Salinity_ppt_YSI", 
+                                 "pH")]
+names(envchem)
+envtemp <- params_Jericho_16s[,c("day_length")]
+envrich <- amplicon_richness_for_study[,c("richness.AVS",
+                                          "richness.MPL",
+                                          "richness.18S",
+                                          "richness.gp23")]
+```
+
+## Try same approach by family with bacteria too ###
+```{r}
+melted_otus <- melt(as.matrix(normalized_16s_OTUs))
+taxonomy_16s <- read.csv( "../results/cleaned_up_16s_taxonomy_Jericho.csv", row.names=1)
+melted_otus$Family <- taxonomy_16s$Family[match(melted_otus$Var2, taxonomy_16s$otu_number)]
+## remove unclassified
+melted_otus <- subset(melted_otus, Family != "unclassified"  )
+
+fam_melted <- melted_otus %>%
+ group_by(Var1,Family) %>%
+ summarise(total=sum(value))
+
+## Ok need to put it back together again.
+## Families on top
+fam_sum_otus <- dcast(fam_melted, Var1 ~  Family)
+## need to make them rownames again
+row.names(fam_sum_otus) <- fam_sum_otus$Var1
+fam_sum_otus <- fam_sum_otus[,-1]
+```
+
+# Summarise 16s OTUs to the order level
+```{r}
+melted_otus <- melt(as.matrix(normalized_16s_OTUs))
+melted_otus$Var2 <- gsub(".size.*.", "", melted_otus$Var2)
+melted_otus$Order <- taxonomy_16s$Order[match(melted_otus$Var2, taxonomy_16s$otu_number)]## remove unclassified
+melted_otus <- subset(melted_otus, Order != "unclassified"  )
+
+ord_melted <- melted_otus %>%
+ group_by(Var1,Order) %>%
+ summarise(total=sum(value))
+
+## Ok need to put it back together again.
+## Families on top
+ord_sum_otus <- dcast(ord_melted, Var1 ~  Order)
+## need to make them rownames again
+row.names(ord_sum_otus) <- ord_sum_otus$Var1
+ord_sum_otus <- ord_sum_otus[,-1]
+
+write.csv(ord_sum_otus, file="../results/normalized_16s_summarized_by_order.csv")
+
+```
+
+# Summarise 16s OTUs to the class level
+```{r}
+melted_otus <- melt(as.matrix(normalized_16s_OTUs))
+melted_otus$Var2 <- gsub(".size.*.", "", melted_otus$Var2)
+melted_otus$Class <- taxonomy_16s$Class[match(melted_otus$Var2, taxonomy_16s$otu_number)]## remove unclassified
+melted_otus <- subset(melted_otus, Class != "unclassified"  )
+
+class_melted <- melted_otus %>%
+ group_by(Var1,Class) %>%
+ summarise(total=sum(value))
+
+## Ok need to put it back together again.
+## Families on top
+class_sum_otus <- dcast(class_melted, Var1 ~  Class)
+## need to make them rownames again
+row.names(class_sum_otus) <- class_sum_otus$Var1
+class_sum_otus <- class_sum_otus[,-1]
+
+write.csv(class_sum_otus, file="../results/normalized_16s_summarized_by_class.csv")
+
+```
+
+```{r}
+normalized_16s_rda_fam_sum <- hell_transform_and_rda(fam_sum_otus ,params_Jericho_16s[,-1] ) 
+```
+
+```{r}
+check_sig_of_rda(normalized_16s_rda_fam_sum) 
+anova.cca(rda(decostand(fam_sum_otus, "hellinger") ~.,params_Jericho_16s[,-1] ),by="axis", step=1000)
+vif.cca(normalized_16s_rda_fam_sum)
+save(normalized_16s_rda_fam_sum, file ="../results/normalized_16s_rda_fam_sum.rda")
+```
+
+(maybe pointless but check significance of the model)
+``` {r}
+pdf("../figures/Triplot_RDA_normalized_16s_rda_fam_sum%03d.pdf", onefile=FALSE)
+plot_scaling_1(normalized_16s_rda_fam_sum)
+dev.off()
+plot_scaling_2(normalized_16s_rda_fam_sum)
+```
+
+
+Partial RDA with forward selection -nothing selected since R2 is so low. 
+```{r} 
+ rda_forward_sel <- RDA_with_forward_selection(fam_sum_otus, params_Jericho_16s[,-1])
+ check_sig_of_rda(rda_forward_sel) 
+# vif.cca(rda_forward_sel)
+# plot_scaling_1(rda_forward_sel)
+# plot_scaling_2(rda_forward_sel)
+```
+
+# Now try with MPL
+```{r}
+VC_dates <- Jericho_data$Date[match(rownames(normalized_MPL_OTUs), original_jericho_data$VC_number)]
+params_Jericho_MPL <- subset(params_Jericho, Date %in% VC_dates )
+amplicon_richness_for_study <- subset(amplicon_richness, Date %in% VC_dates )
+## temporary fix
+amplicon_richness_for_study[is.na(amplicon_richness_for_study)] <- 0
+#Physiogrpahy
+envbio <- params_Jericho_MPL[,c("Average_bacterial_abundance", "Average_chl_a")]
+names(envbio)
+envchem <- params_Jericho_MPL[,c("Average_PO4", "Average_SiO2",
+                                 "Temperature_YSI", "Salinity_ppt_YSI",  "pH")]
+envtemp <- params_Jericho_MPL[,c("day_length")]
+envrich <- amplicon_richness_for_study[,c("richness.AVS","richness.16S","richness.18S","richness.gp23")]
+```
+
+
+```{r}
+normalized_MPL_rda <- hell_transform_and_rda(normalized_MPL_OTUs,
+                                             params_Jericho_MPL[,-1] ) 
+```
+
+```{r}
+check_sig_of_rda(normalized_MPL_rda) 
+```
+
+
+## need to fix this
+```{r}
+MPL_group_sums <- read.csv("../results/MPL_group_sums_by_site_prop.csv")
+gp23_group_sums <- read.csv("../results/gp23_group_sums_by_site_prop.csv")
+#group_sums_MPL_rda <- hell_transform_and_rda(MPL_group_sums[,-1],
+#                                             params_Jericho_MPL[,-1] ) 
+```
+
+```{r}
+#check_sig_of_rda(group_sums_MPL_rda) 
+```
+
+
+```{r}
+#plot_scaling_1(group_sums_MPL_rda)
+
+#plot_scaling_2(group_sums_MPL_rda)
+```
+
+
+
+``` {r}
+# OTU_table <- MPL_group_sums[,-1]
+# transformation <- "hellinger"
+# spe.hel <- decostand(OTU_table, transformation)
+#spe.part.bio_chem <- varpart(spe.hel, envchem, envbio, amplicon_richness_for_study$richness.18S)
+#spe.part.bio_chem
+#plot(spe.part.bio_chem, digits=2)
+
+## what about compared 18s 
+# S18_ord_sums <- read.csv("../results/normalized_18s_summarized_by_order.csv")
+# S18_ord_sums_for_MPL <- subset(S18_ord_sums, S18_ord_sums$X %in% MPL_group_sums$VC)
+# 
+# S18_ord_sums_for_MPL_no_zero <- S18_ord_sums_for_MPL[, colSums(S18_ord_sums_for_MPL) > 800]
+
+
+
+# 
+# OTU_table <- subset(MPL_group_sums, MPL_group_sums$VC%in% S18_ord_sums$X)
+# VC_dates <- Jericho_data$Date[match(OTU_table$VC, original_jericho_data$VC_number)]
+# params_Jericho_MPL <- subset(params_Jericho, Date %in% VC_dates )
+# amplicon_richness_for_study <- subset(amplicon_richness, Date %in% VC_dates )
+# ## temporary fix
+# amplicon_richness_for_study[is.na(amplicon_richness_for_study)] <- 0
+# #Physiogrpahy
+# envbio <- params_Jericho_MPL[,c("Average_bacterial_abundance", "Average_chl_a")]
+# names(envbio)
+# envchem <- params_Jericho_MPL[,c("Average_PO4", "Average_SiO2",
+#                                  "Temperature_YSI", "Salinity_ppt_YSI",  "pH")]
+# envtemp <- params_Jericho_MPL[,c("day_length")]
+# envrich <- amplicon_richness_for_study[,c("richness.AVS","richness.16S","richness.18S","richness.gp23")]
+# transformation <- "hellinger"
+# spe.hel <- decostand(OTU_table[,-(1:2)], transformation)
+# spe.part.bio_chem <- varpart(spe.hel, 
+#                              envchem, 
+#                              envbio, 
+#                              amplicon_richness_for_study$richness.18S,
+#                              S18_ord_sums_for_MPL_no_zero[,-1])
+# spe.part.bio_chem
+# plot(spe.part.bio_chem, digits=2)
+# 
+# 
+# spe.part.bio_chem <- varpart(spe.hel, 
+#                              envchem, 
+#                              envbio, 
+#                              #amplicon_richness_for_study$richness.18S
+#                              #,
+#                              S18_ord_sums_for_MPL_no_zero[,-1]
+#                              )
+# spe.part.bio_chem
+# plot(spe.part.bio_chem, digits=2)
+# 
+# 
+
+```
+
+Partial RDA with forward selection -removed for now...forward selection not picking anything. R2 is too low. 
+```{r} 
+# melted_mpl <- melt(as.matrix(normalized_MPL_OTUs))
+# top20_MPL <- find_top20_OTUs(melted_mpl)
+# top20_normalized_MPL <- subset(normalized_MPL_OTUs, select= colnames(normalized_MPL_OTUs) %in% top20_MPL$Var2)
+# 
+# OTU_table <- top20_normalized_MPL
+# transformation <- "hellinger"
+# spe.hel <- decostand(OTU_table, transformation)
+# spe.part.bio_chem <- varpart(spe.hel, envchem, envbio)
+# spe.part.bio_chem
+# plot(spe.part.bio_chem, digits=2)
+# 
+# spe.part.bio_chem <- varpart(spe.hel, envchem, envrich,S18_ord_sums_for_MPL)
+# spe.part.bio_chem
+# plot(spe.part.bio_chem, digits=2)
+
+```
+
+
+```{r}
+
+
+```
+## need to fix in script 46
+
+```{r}
+##### Now try with gp23 ####
+# VC_dates <- Jericho_data$Date[match(rownames(normalized_gp23_OTUs), original_jericho_data$VC_number)]
+# params_Jericho_gp23 <- subset(params_Jericho, Date %in% VC_dates )
+# 
+# gp23_group_sums <- read.csv("../results/gp23_group_sums_by_site_prop.csv")
+# group_sums_gp23_rda <- hell_transform_and_rda(gp23_group_sums[,-1],
+#                                              params_Jericho_gp23[,-1] ) 
+# check_sig_of_rda(group_sums_gp23_rda) ## significant
+# 
+# plot_scaling_1(group_sums_gp23_rda)
+# plot_scaling_2(group_sums_gp23_rda)
+# 
+# amplicon_richness_for_study <- subset(amplicon_richness, Date %in% VC_dates )
+# ## temporary fix
+# amplicon_richness_for_study[is.na(amplicon_richness_for_study)] <- 0
+# #Physiogrpahy
+# envbio <- params_Jericho_gp23[,c("Average_bacterial_abundance", "Average_chl_a")]
+# names(envbio)
+# 
+# envchem <- params_Jericho_gp23[,c("Average_PO4", "Average_SiO2",
+#                                   "Temperature_YSI", "Salinity_ppt_YSI", "pH")]
+# names(envchem)
+# envtemp <- params_Jericho_gp23[,c("day_length")]
+# envrich <- amplicon_richness_for_study[,c("richness.AVS","richness.16S","richness.18S","richness.MPL")]
+# 
+# OTU_table <- gp23_group_sums[,-1]
+# transformation <- "hellinger"
+# spe.hel <- decostand(OTU_table[,-(1:2)], transformation)
+# 
+# spe.part.bio_chem <- varpart(spe.hel, envchem, envbio)
+# 
+# 
+# S16_ord_sums <- read.csv("../results/normalized_16s_summarized_by_order.csv")
+# S16_ord_sums_for_gp23 <- subset(S16_ord_sums, S16_ord_sums$X %in% gp23_group_sums$VC)
+# 
+# S16_ord_sums_for_gp23_no_zero <- S16_ord_sums_for_gp23[, colSums(S16_ord_sums_for_gp23) > 200]
+# 
+# 
+# spe.part.bio_chem <- varpart(spe.hel, 
+#                              envchem, 
+#                              envbio, 
+#                              amplicon_richness_for_study$richness.16S
+#                              #,
+#                              #S16_ord_sums_for_gp23_no_zero [,-1]
+#                              )
+# spe.part.bio_chem
+# plot(spe.part.bio_chem, digits=2)
+
+```
+
+
+```{r}
+##### Now try with AVS ####
+VC_dates <- Jericho_data$Date[match(rownames(normalized_AVS_OTUs), original_jericho_data$VC_number)]
+params_Jericho_AVS <- subset(params_Jericho, Date %in% VC_dates )
+amplicon_richness_for_study <- subset(amplicon_richness, Date %in% VC_dates )
+## temporary fix
+amplicon_richness_for_study[is.na(amplicon_richness_for_study)] <- 0
+#Physiogrpahy
+envbio <- params_Jericho_AVS[,c("Average_bacterial_abundance", "Average_chl_a")]
+names(envbio)
+
+envchem <- params_Jericho_AVS[,c("Average_PO4", "Average_SiO2",
+                                 "Temperature_YSI", "Salinity_ppt_YSI",  "pH")]
+names(envchem)
+envtemp <- params_Jericho_AVS[,c("day_length")]
+envrich <- amplicon_richness_for_study[,c("richness.AVS","richness.16S","richness.18S","richness.MPL")]
+
+## not significant overall
+RDA_AVS <- hell_transform_and_rda(normalized_AVS_OTUs,params_Jericho_AVS[,-1])
+check_sig_of_rda(RDA_AVS)
+```
+

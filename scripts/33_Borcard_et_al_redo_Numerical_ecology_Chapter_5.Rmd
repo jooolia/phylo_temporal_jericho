@@ -1,0 +1,531 @@
+---
+title: "34_Borcard_et_al_redo_Numerical_ecology_Chapter_5.Rmd"
+author: "Julia Gustavsen"
+date: "04/05/2015"
+output: html_document
+---
+
+# Chapter 5 Unconstrained Ordination
+```{r, echo=FALSE}
+## add in the functions for the pairs 
+
+panel.cor <- function(x, y, method="pearson", digits=3, cex.cor=1.2, no.col=FALSE)
+{
+ usr <- par("usr"); on.exit(par(usr))
+ par(usr = c(0, 1, 0, 1))
+ r <- cor(x, y, method=method)
+ ra <- cor.test(x, y, method=method)$p.value
+	txt <- round(r, digits)
+	prefix <- ""
+	if(ra <= 0.1) prefix <- "."
+	if(ra <= 0.05) prefix <- "*"
+	if(ra <= 0.01) prefix <- "**"
+	if(ra <= 0.001) prefix <- "***"
+	if(no.col)
+	{
+		color <- 1
+		if(r < 0) { if(ra <= 0.001) sig <- 4 else sig <- 3 }
+		else { if(ra <= 0.001) sig <- 2 else sig <- 1 }
+	}
+	else
+	{
+		sig <- 1
+		if(ra <= 0.001) sig <- 2
+		color <- 2
+		if(r < 0) color <- 4
+	}
+	txt <- paste(txt, prefix, sep="\n")
+	text(0.5, 0.5, txt, cex = cex.cor, font=sig, col=color)
+}
+
+
+## Put histograms on the diagonal
+panel.hist <- function(x, no.col=FALSE, ...)
+{
+	usr <- par("usr"); on.exit(par(usr))
+	par(usr = c(usr[1:2], 0, 1.5) )
+	his <- hist(x, plot=FALSE)
+	breaks <- his$breaks; nB <- length(breaks)
+	y <- his$counts
+	y <- y/max(y)
+	if(no.col) rect(breaks[-nB], 0, breaks[-1], y, col="gray", ...)
+	else rect(breaks[-nB], 0, breaks[-1], y, col="cyan", ...)
+}
+
+
+## Add black lowess curves to scatter plots
+panel.smoothb <- function (x, y, col=par("col"), bg=NA, pch=par("pch"), 
+	cex=1, col.smooth="black", span=2/3, iter=3, ...) 
+{
+	points(x, y, pch=pch, col=col, bg=bg, cex=cex)
+	ok <- is.finite(x) & is.finite(y)
+	if (any(ok)) 
+	lines(stats::lowess(x[ok], y[ok], f=span, iter=iter), col=col.smooth, ...)
+}
+```
+
+
+```{r}
+library (ade4)
+library(vegan)
+library(gclus)
+library(cluster)
+library(ape)
+library(ggplot2)
+# install.packages("packfor", repos="http://R-Forge.R-project.org")
+
+data (doubs)
+spe <- doubs$fish
+env <- doubs$env
+spa <- doubs$xy
+str(spe)
+str(env)
+str(spa)
+#REmove empty site 8
+spe <- spe[-8,]
+env <- env[-8,]
+spa <- spa[-8,]
+```
+
+Looks for main trends using continuous axes. 
+-All descriptive, there are no statistical test used to assess significance of the structures provided. (Can use constrained ordination if so. )
+
+## 5.3  Principal Component Analysis
+
+* generates system of coordinates
+* rotates around until max variance accounted by the axes. 
+* uses a dispersion matrix (S) an association matrix containing variances and covariances of variables or correlations computed from variables with different dimensions. 
+* only for quantitative variables
+* preserves Euclidean distance and detects linear relationships (so not really appropriate for raw species abundance data, but can do after appropriate pre-transformation)
+* objects are points and variables are arrows. 
+
+### 5.3.2 PCA on Environmental variables of Doubs data set
+
+```{r}
+## PCA on full dataset (correlation matrix: scale=TRUE)
+
+env.pca <- rda(env, scale=TRUE) # scale=TRUE calls for a stadardization of the variables
+env.pca
+summary(env.pca) # Default scaling 2
+## what is this scaling 2??
+summary(env.pca, scaling = 1)
+
+```
+
+#### What do all these things mean:
+
+* Inertia: variation in the data
+Sum of variances of the variables or sum of diagonal values in a correlation matrix-corresponds to # of variables. 
+* Unconstrained vs Constrained: 
+ * Unconstrained ordination tries to display the variation in data.
+ * Constrained ordination tries to display only the variation that can be explained with constraining variables.
+* Eigenvalues - measures of importance( variance) of axes
+* Scaling - the way that ordination plots are projected into space for display.
+ + Scaling 1: distance biplot: eigenvectors are scaled to unit length
+  + 1. Distances among objects are approximations of their Euclidean distances in multidimensional space
+  + 2. Angles among descriptor vectors are meaningless
+ + Scaling 2: correlation biplot: each eigenvector is scaled to square root of its eigenvalue
+  + 1. Distances among object in biplot are not approximations of their Euclidean distances in multidimensional space
+  + 2. Angles between descriptors in biplot reflect their correlations. 
+ + So if want to see relationships among objects choose scaling 1, but if want to see relationships among descriptors choose scaling 2. 
+* Species scores: coordinates of the arrow heads of the variables
+* Site scores: coordinates of the sites
+
+#### 5.3.2.3 Plotting and interpreting the results
+
+* Usually by looking at the eigenvalues the user decides how many axes are useful to display and interpret. 
+* Can be arbitrary, e.g. display axes necessary to explain 75% of variation. 
+* Or can use a model (e.g. broken stick) to help decide
+
+```{r}
+## Examine and plot partial results from PCA output
+
+## Eigenvalues
+ev <- env.pca$CA$eig
+
+## Apply Kaiser-Guttman cirterio to select axes
+## This computes the mean of all the eigenvalues and interprets only the axes larger than the mean
+ev[ev > mean(ev)] ## give first 2 axes
+
+## Broken stick model
+## not sure what is happening here!
+n <- length(ev)
+bsm <- data.frame(j=seq(1:n), p=0)
+bsm$p[1] <- 1/n
+for (i in 2:n){
+ bsm$p[i] = bsm$p[i-1] + (1/(n+1-i))
+}
+
+
+bsm$p <- 100*bsm$p/n
+bsm
+
+## Plot eigenvalues and % of variance for each axis
+
+barplot(ev, main="Eigenvalues", col="bisque", las=2)
+abline(h=mean(ev), col="red") ## average eigenvalue
+legend("topright", "Average eigenvalue", lwd=1, col=2, bty="n")
+
+## interpret only the values that are longer than the broken stick. 
+## don't quite get why. 
+barplot(t(cbind(100*ev/sum(ev),bsm$p[n:1])), beside=TRUE, main="%variance", col=c("bisque", 2), las=2)
+legend("topright", c("% eigenvalue", "Broken stick model"), pch=15, col=c("bisque", 2), bty="n")
+
+
+```
+
+
+Plot the data:
+
+```{r}
+# Two PCA biplots: scaling 1 and 2
+
+biplot(env.pca, scaling=1, main="PCA- scaling 1")
+biplot(env.pca, main="PCA- scaling 2") ## Default is scaling 2
+
+```
+
+The text has a really useful summary of how to interpret the plots. 
+
+#### 5.3.2.4 Combining clustering and ordination results
+
+Comparing these results with a clustering can be useful.
+
+```{r}
+
+# Clustering the objects using the environmental data: Euclidean distance after standardizing variable, followed by Ward clustering
+env.w <- hclust(dist(scale(env)), "ward.D")
+## scale centers and scales columns of numeric data
+
+#look at dendogram
+plot(env.w)
+
+## Cut dendogram to yield 4 groups
+gr <- cutree(env.w, k=4)
+grl <- levels(factor(gr))
+
+# Get the site scores, scaling 1
+sit.sc1 <- scores(env.pca, display="wa", scaling=1)
+
+# Plot the sites with cluster symbols and colours(scaling 1)
+p <- plot(env.pca, display="wa", scaling=1, type="n", main="PCA correlation +clusters")
+abline(v=0, lty="dotted") # aren't these already on the plot??
+abline(h=0, lty="dotted")
+
+for (i in 1:length(grl)){
+ points(sit.sc1[gr==i,], pch=(14+i), cex=2, col=i+1)
+ 
+}
+
+text(sit.sc1, row.names(env), cex=.7, pos=3)
+
+## Adds the dendogram on to the ordination plot. 
+## locator(1) lets me choose where to put the legend. Kind of neat. 
+
+ordicluster(p, env.w, col="dark grey")
+legend(locator(1),paste("Group", c(1:length(grl))),
+       pch=14+c(1:length(grl)),
+       col=1+c(1:length(grl)), pt.cex=2)
+
+```
+
+
+### 5.3.3 PCA on Transformed species data. 
+```{r}
+## PCA on fish abundance data
+
+# Hellinger pre-transformation of the species data
+spe.h <- decostand(spe,"hellinger")
+spe.h.pca <- rda(spe.h)
+spe.h.pca
+summary(spe.h.pca)
+
+ev <- spe.h.pca$CA$eig
+
+ev[ev > mean(ev)] ## give first 2 axes
+
+## Broken stick model
+## not sure what is happening here!
+n <- length(ev)
+bsm <- data.frame(j=seq(1:n), p=0)
+bsm$p[1] <- 1/n
+for (i in 2:n){
+ bsm$p[i] = bsm$p[i-1] + (1/(n+1-i))
+}
+
+
+bsm$p <- 100*bsm$p/n
+bsm
+
+## Plot eigenvalues and % of variance for each axis
+
+barplot(ev, main="Eigenvalues", col="bisque", las=2)
+abline(h=mean(ev), col="red") ## average eigenvalue
+legend("topright", "Average eigenvalue", lwd=1, col=2, bty="n")
+
+## interpret only the values that are longer than the broken stick. 
+## don't quite get why. 
+barplot(t(cbind(100*ev/sum(ev),bsm$p[n:1])), beside=TRUE, main="%variance", col=c("bisque", 2), las=2)
+legend("topright", c("% eigenvalue", "Broken stick model"), pch=15, col=c("bisque", 2), bty="n")
+
+
+
+biplot(spe.h.pca, scaling=1, main="PCA- scaling 1")
+biplot(spe.h.pca, main="PCA- scaling 2") ## Default is scaling 2
+
+## what if it is done on just the raw data
+spe.pca <- rda(spe)
+biplot(spe.pca)
+
+library("ggvegan")
+
+autoplot(spe.h.pca)
+## use fortify method to extract scores in ggplot-friendly format
+scrs <- fortify(spe.h.pca, scaling = 2)
+## take only site scores for this
+sites <- with(scrs, scrs[Score == "sites", ])
+species <- with(scrs, scrs[Score == "species", ])
+## add in something to plot for the arrows
+
+
+## add on Moisture variable
+## not working right now....rows differ
+#scrs <- cbind(scrs, Chla = params_Jericho_without_date$Average_chl_a)
+
+## for all points on one plot, Moisture coded by colour
+plt <- ggplot(sites, aes(x = Dim1, y = Dim2, label=Label
+                        #, colour = Moisture
+                        )) + 
+         geom_point() +
+ coord_fixed()+
+ geom_text(hjust=1.2)
+plt
+
+## add in arrows
+plt <- ggplot(sites, aes(x = Dim1, y = Dim2, label=Label
+                        #, colour = Moisture
+                        )) + 
+         geom_point() +
+ coord_fixed()+
+ geom_text(hjust=1.2)+
+ geom_segment(data=species, aes(x=Dim1, y=Dim2, xend=0, yend=0), colour="pink")
+plt
+```
+
+### 5.3.4 Domain of application of PCA
+
+* main application ordination of sites on basis of environmental data,
+or after transformation community composition data.
+
+* don't quite understand this: "data must not be transposed since covariances or correlations among objects are meaningless" objects are sites or samples, so now that makes a bit more sense. 
+* avoid interpreting the closeless of the tips of the arrows, it is rather the angle between them that should be interpreted. 
+
+## 5.4 Correspondance analysis
+
+* For species does not need transformation of species abundance data. Data must be frequency or frequencly-like, homogeneous and non-neg. So species counts or presence-absence data.
+
+* CA scaling one- most appropriate for ordinations of objects (sites)
+-interesting that any site found near the point representing a species is likely to contain a high contribution of that species. 
+
+* CA scaling two- most appropriate for ordination of species. Species points that are close to each other likely have similar relative frequencies along the object. And any species that lies close to the point representing an object is more likely to be found in that object than in objects further away. 
+
+###5.4.2 Runnign CA using cca() of vegan
+
+```{r}
+
+## compute ca
+## had a conflict with ade4
+spe.ca <- vegan::cca(spe)
+spe.ca
+summary(spe.ca)
+summary(spe.ca, scaling=1)
+## In CA values over 0.6 indicate a very strong gradient
+
+## broken stick
+ev <- spe.ca$CA$eig
+
+ev[ev > mean(ev)] ## give first 2 axes
+
+## Broken stick model
+## not sure what is happening here!
+n <- length(ev)
+bsm <- data.frame(j=seq(1:n), p=0)
+bsm$p[1] <- 1/n
+for (i in 2:n){
+ bsm$p[i] = bsm$p[i-1] + (1/(n+1-i))
+}
+
+
+bsm$p <- 100*bsm$p/n
+bsm
+
+## Plot eigenvalues and % of variance for each axis
+
+barplot(ev, main="Eigenvalues", col="bisque", las=2)
+abline(h=mean(ev), col="red") ## average eigenvalue
+legend("topright", "Average eigenvalue", lwd=1, col=2, bty="n")
+
+## interpret only the values that are longer than the broken stick. 
+## don't quite get why. 
+barplot(t(cbind(100*ev/sum(ev),bsm$p[n:1])), beside=TRUE, main="%variance", col=c("bisque", 2), las=2)
+legend("topright", c("% eigenvalue", "Broken stick model"), pch=15, col=c("bisque", 2), bty="n")
+
+## draw plots
+## sites are centroids of species
+## what does that mean..from wikipedia: "the centroid or geometric center of a two-dimensional region is the arithmetic mean ("average") position of all the points in the shape"
+## ok I think I get it now, they are scaled relative to the other. 
+plot(spe.ca, scaling=1, main="CA fish abundance-biplot scaling1")
+## species are centroids of sites
+plot(spe.ca, main="CA fish abundances-biplot scaling 2")
+
+## For both sets of scaling cases, care should be taken for the interpretation of species close to the origin of the graph. This proximity could mean either that the species is at its optimum in the mid-range of the ecological gradients represented by the axes, or that it is present everywhere along the gradient.
+```
+
+
+#### 5.4.2.2 Passive (Post hoc) Explanaiton of Axes using environmental variables.
+
+This is using envfit()
+
+“envfit finds vectors or factor averages of environmental variables.
+[...] The projections of points onto vectors have maximum correlation with
+corresponding environmental variables, and the factors show the averages of factor
+levels”.
+
+
+
+```{r}
+##A posterior projection of environmental variables in a CA
+spe.ca.env <- envfit(spe.ca, env)
+plot(spe.ca.env)
+
+```
+
+
+#### 5.4.2.3 Reorder data table on basis of ordination axis.
+
+```{r}
+vegemite(spe, spe.ca) ## reorders based on ca.
+```
+
+## 5.5 Principal coordinate analysis
+
+If you want to use another distance measure than PCoA is good. PCA and CA impose the distance preserved among objects. So Euclidean for PCA and chi-squared for CA.
+PCoA does a Euclidean representation of a set of objects based on a similarity or dissimilarity matrix. 
+
+-can project species onto the plot afterwards.
+
+"In the case of Euclidean association measures, PCoA behaves in a Euclidean manner. For instance, computing a Euclidean distance among sites and running a PCoA yields the same results as running a PCA on a covariance matrix of the same data and looking at the scaling 1 ordination results."
+
+-can produce negative eigenvalues for non-euclidean axes. These cannot be represented on real ordination axes since they are complex. 
+-mostly ok, but can be problematic if they are the same size as the positive ones. 
+-can correct for this using scaling or adding a constant. 
+
+### 5.5.2 Application to the Doubs data set using `cmdscale()` and `vegan`
+
+```{r}
+## PCOA on bray-curtis dissimilarity matrix of fish species
+spe.bray <- vegdist(spe)
+spe.b.pcoa <- cmdscale(spe.bray,k=(nrow(spe)-1), eig=TRUE)
+## Plot of the sites and weighted average prjection of species
+ordiplot(scores(spe.b.pcoa)[,c(1,2)],type="t", main="PCoA with species")
+
+abline(h=0, lty=3)
+abline(v=0, lty=3)
+## Add species
+spe.wa <- wascores(spe.b.pcoa$point[,1:2], spe)
+text(spe.wa, rownames(spe.wa), cex=0.7, col="red")
+
+```
+
+
+## 5.5.3 another way to do it. 
+
+
+## Compare the PCoA with Euclidean and non-Euclidean dissimilarity matrices
+
+```{r}
+is.euclid(dist(spe.h))
+spe.h.pcoa <- pcoa(dist(spe.h))
+summary(spe.h.pcoa)
+spe.h.pcoa$values
+
+##PCoa on Bray-curtis dissimilarity matrix
+
+is.euclid(spe.bray)
+spe.bray.pcoa <- pcoa(spe.bray)
+summary(spe.bray.pcoa)
+spe.bray.pcoa$values
+
+##PCoa on square root of Bray-curtis dissimilarity matrix
+
+is.euclid(sqrt(spe.bray))
+spe.braysq.pcoa <- pcoa(sqrt(spe.bray))
+summary(spe.braysq.pcoa)
+spe.braysq.pcoa$values
+
+## Lingoes correction
+
+spe.brayl.pcoa <- pcoa(spe.bray, correction = "lingoes")
+summary(spe.brayl.pcoa)
+spe.brayl.pcoa$values
+
+
+spe.brayc.pcoa <- pcoa(spe.bray, correction = "cailliez")
+summary(spe.brayc.pcoa)
+spe.brayc.pcoa$values
+
+```
+
+
+## 5.6 Nonmetric Multidimensional Scaling
+
+If you don't need to preserve the exact distances in an ordination plot, but represent the ordering relationships among objects then you can use nmds.
+
+Can use isoMDS() if you have missing values, otherwise use the metaMDS() from vegan.
+```{r}
+spe.nmds <- metaMDS(spe,distance="bray")
+spe.nmds
+
+spe.nmds$stress
+
+plot(spe.nmds, type="t", main=paste("NMDS/Bray -stress =", round(spe.nmds$stress,3)))
+```
+
+
+Want to look at the goodness of fit using a Shepard diagram
+
+```{r}
+## my stress is a lot lower than the book. Thus my diagram is quite different. Not sure why their stress is so high. 
+stressplot(spe.nmds)
+gof = goodness(spe.nmds)
+plot(spe.nmds, type="t", main="Goodness of fit")
+points(spe.nmds, display = "sites", cex=gof*100)
+```
+
+Could also add in clustering
+
+```{r}
+
+spe.bray.ward <- hclust(spe.bray, "ward.D")
+spe.bw.groups <- cutree(spe.bray.ward, k=4)
+grp.lev <- levels(factor(spe.bw.groups))
+
+## Combine with NMDS result
+sit.sc <- scores(spe.nmds)
+p <- ordiplot(sit.sc, type="n", main="NMDS/Bray +clusters Ward/Bray")
+for (i in 1:length(grp.lev)){
+ points(sit.sc[spe.bw.groups=i,], pch=(14+i), cex=2, col=i+1)
+} 
+
+text(sit.sc, row.names(spe), pos=4, cex=0.7)
+## add dendogram
+ordicluster(p, spe.bray.ward, col="dark grey")
+legend("bottomleft", paste("Group", c(1:length(grp.lev)), pch=14+c(1:length(grp.lev)), col=1+c(1:length(grp.lev)), pt.cex=2))
+
+```
+
+
+
+
+
+

@@ -1,0 +1,1 @@
+## Idea would be that I would create a set of scatterplots using OTUs as the categories and using the environmental data from when they were found by each date to plot. I will use coord_flip and then line up the plots so that I will compare the otus and the parameters. 
